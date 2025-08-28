@@ -42,6 +42,8 @@ help:
 	@echo "  ingest                  - Ingest documents from a source directory. Usage: make ingest src=./my_docs"
 	@echo "  search                  - Perform a hybrid search. Usage: make search query=\"my search query\""
 	@echo "  evaluate-quantization   - Benchmark quantization recall. Usage: make evaluate-quantization src=./sample_docs"
+	@echo "  erasedata               - ⚠️  Delete all Qdrant vector data (with confirmation)"
+	@echo "  eraseconfig             - ⚠️  Delete Qdrant configuration (with confirmation)"
 	@echo "  clean                   - Remove virtual environment and generated files"
 
 # --- Core Targets ---
@@ -170,13 +172,12 @@ setup-qdrant:
 
 start-qdrant: setup-qdrant
 	@echo "Starting Qdrant Docker container with GPU support..."
-	@docker run -d --name $(QDRANT_CONTAINER_NAME) --gpus all \
-	  -p 6333:6333 -p 6334:6334 \
+	@docker run -d --name $(QDRANT_CONTAINER_NAME) --network host --gpus all \
 	  -v $(CURDIR)/qdrant_data:/qdrant/storage \
 	  -v $(CURDIR)/qdrant_config:/qdrant/config \
 	  -e QDRANT__GPU__INDEXING=1 \
 	  $(QDRANT_IMAGE)
-	@echo "Qdrant container is starting. Use 'make logs-qdrant' to monitor."
+	@echo "Qdrant container is starting on host network (port 6333). Use 'make logs-qdrant' to monitor."
 
 stop-qdrant:
 	@echo "Stopping and removing Qdrant Docker container..."
@@ -186,6 +187,28 @@ stop-qdrant:
 
 logs-qdrant:
 	@docker logs -f $(QDRANT_CONTAINER_NAME)
+
+erasedata:
+	@echo "⚠️  WARNING: This will permanently delete all Qdrant vector data!"
+	@read -p "Are you sure you want to delete qdrant_data/? Type 'yes' to confirm: " confirm && \
+	if [ "$$confirm" = "yes" ]; then \
+		echo "Removing Qdrant data directory..."; \
+		rm -rf $(PROJECT_DIR)/qdrant_data; \
+		echo "✓ Qdrant data erased."; \
+	else \
+		echo "Operation cancelled."; \
+	fi
+
+eraseconfig:
+	@echo "⚠️  WARNING: This will delete Qdrant configuration!"
+	@read -p "Are you sure you want to delete qdrant_config/? Type 'yes' to confirm: " confirm && \
+	if [ "$$confirm" = "yes" ]; then \
+		echo "Removing Qdrant config directory..."; \
+		rm -rf $(PROJECT_DIR)/qdrant_config; \
+		echo "✓ Qdrant config erased."; \
+	else \
+		echo "Operation cancelled."; \
+	fi
 
 ingest:
 ifndef src
