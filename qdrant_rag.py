@@ -210,7 +210,7 @@ def ensure_venv():
         # Check if user is trying to run management/setup commands
         management_commands = [
             'install', 'installdeps', 'verify', 'clean', 'erasedata',
-            'start-qdrant', 'stop-qdrant', 'logs-qdrant', 'setup-qdrant',
+            'start-qdrant', 'stop-qdrant', 'logs-qdrant',
             '--help', '-h', 'help'
         ]
         if len(sys.argv) > 1 and sys.argv[1] in management_commands:
@@ -1408,8 +1408,6 @@ def handle_management_command(command: str, args):
         stop_qdrant_container()
     elif command == "logs-qdrant":
         show_qdrant_logs()
-    elif command == "setup-qdrant":
-        setup_qdrant_directories(project_dir)
     elif command == "format":
         run_code_formatter(project_dir, venv_dir)
     elif command == "lint":
@@ -1555,27 +1553,14 @@ def install_system_dependencies():
         print("Please install the required dependencies manually.")
 
 
-def setup_qdrant_directories(project_dir: Path):
-    """Create local directory for Qdrant data."""
-    print("Setting up Qdrant data directory...")
-    
-    data_dir = project_dir / "qdrant_data"
-    data_dir.mkdir(exist_ok=True)
-    data_dir.chmod(0o755)
-    
-    # Ensure config.yaml exists in project root
-    config_file = project_dir / "config.yaml"
-    if not config_file.exists():
-        config_file.write_text("storage:\n  performance:\n    async_scorer: true\n")
-        print("Created default config.yaml in project root")
-    
-    print("Qdrant data directory ready.")
-
-
 def start_qdrant_container(project_dir: Path):
     """Start Qdrant Docker container with GPU support."""
-    # First ensure directories exist
-    setup_qdrant_directories(project_dir)
+    # Ensure qdrant_data directory exists with proper permissions
+    data_dir = project_dir / "qdrant_data"
+    if not data_dir.exists():
+        data_dir.mkdir(exist_ok=True)
+        data_dir.chmod(0o755)
+        print("Created qdrant_data directory")
     
     print("Starting Qdrant Docker container with GPU support...")
     
@@ -1936,9 +1921,6 @@ Examples:
     subparsers.add_parser(
         "logs-qdrant", help="View Qdrant container logs"
     )
-    subparsers.add_parser(
-        "setup-qdrant", help="Create local directories for Qdrant data/config"
-    )
     
     # Development tools
     subparsers.add_parser(
@@ -1978,7 +1960,7 @@ Examples:
 
     # Handle commands that don't need the pipeline
     if args.command in ["install", "installdeps", "start-qdrant", "stop-qdrant", 
-                        "logs-qdrant", "setup-qdrant", "format", "lint", 
+                        "logs-qdrant", "format", "lint", 
                         "typecheck", "check", "test", "qa", "verify", 
                         "clean", "erasedata"]:
         handle_management_command(args.command, args)
