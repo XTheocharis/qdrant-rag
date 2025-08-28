@@ -205,10 +205,15 @@ def ensure_venv():
     if str(current_python) == str(venv_python):
         return  # Already using correct Python
 
-    # Check if venv exists - but allow install, installdeps, and help commands
+    # Check if venv exists - but allow management commands that don't need venv
     if not venv_dir.exists():
-        # Check if user is trying to run install, installdeps, verify, or help
-        if len(sys.argv) > 1 and sys.argv[1] in ['install', 'installdeps', 'verify', '--help', '-h', 'help']:
+        # Check if user is trying to run management/setup commands
+        management_commands = [
+            'install', 'installdeps', 'verify', 'clean', 'erasedata',
+            'start-qdrant', 'stop-qdrant', 'logs-qdrant', 'setup-qdrant',
+            '--help', '-h', 'help'
+        ]
+        if len(sys.argv) > 1 and sys.argv[1] in management_commands:
             return  # Allow these commands without venv
         print(f"Error: Virtual environment not found at {venv_dir}")
         print("Please run './qdrant_rag.py install' first to set up the environment.")
