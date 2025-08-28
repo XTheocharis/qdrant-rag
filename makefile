@@ -52,10 +52,12 @@ install:
 		echo "Creating virtual environment at $(VENV_DIR)..."; \
 		if command -v uv &> /dev/null; then \
 			uv venv $(VENV_DIR); \
+			echo "Installing pip in uv-created virtual environment..."; \
+			uv pip install --python $(PYTHON) pip; \
 		else \
 			python3 -m venv $(VENV_DIR); \
+			$(PYTHON) -m pip install --upgrade pip; \
 		fi; \
-		$(PYTHON) -m pip install --upgrade pip; \
 	else \
 		echo "Using existing virtual environment at $(VENV_DIR)"; \
 	fi
@@ -67,25 +69,14 @@ install:
 		$(PYTHON) -m pip install ruff mypy pytest pytest-asyncio pytest-cov build datasketch; \
 	fi
 	@echo ""
-	@echo "Choose installation type:"
-	@echo "  1) Minimal (dev tools only, no heavy ML dependencies)"
-	@echo "  2) Full (all dependencies including GPU packages)"
-	@echo ""
-	@read -p "Enter choice [1-2] (default: 1): " -n 1 -r choice; \
-	echo; \
-	if [[ "$$choice" == "2" ]]; then \
-		echo "Installing full dependencies (this may take several minutes)..."; \
-		if command -v uv &> /dev/null; then \
-			uv pip install --python $(PYTHON) -e ".[dev]"; \
-			echo "Installing PyTorch with CUDA support..."; \
-			uv pip install --python $(PYTHON) torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
-		else \
-			$(PYTHON) -m pip install -e ".[dev]"; \
-			$(PYTHON) -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121; \
-		fi; \
+	@echo "Installing full dependencies (this may take several minutes)..."
+	@if command -v uv &> /dev/null; then \
+		uv pip install --python $(PYTHON) -e ".[dev]"; \
+		echo "Installing PyTorch with CUDA support..."; \
+		uv pip install --python $(PYTHON) torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
 	else \
-		echo "Installing minimal setup..."; \
-		$(PYTHON) -m pip install --no-deps -e .; \
+		$(PYTHON) -m pip install -e ".[dev]"; \
+		$(PYTHON) -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
 	fi
 	@echo ""
 	@echo "✅ Python environment ready at $(VENV_DIR)"
@@ -123,17 +114,21 @@ installdeps:
 		echo ""; \
 		if command -v pacman &> /dev/null; then \
 			echo "Step 2: Installing system packages via pacman..."; \
-			sudo pacman -Syu --noconfirm; \
 			sudo pacman -S --needed --noconfirm \
 				python python-pip git curl wget unzip gcc make cmake pkg-config \
-				libxml2 libxslt zlib bzip2 lz4 zstd openssl base-devel \
+				libxml2 libxslt bzip2 lz4 zstd openssl base-devel \
 				htop iotop btop lm_sensors nvtop \
 				docker nvidia nvidia-utils nvidia-settings cuda nvidia-container-toolkit \
 				file poppler tesseract tesseract-data-eng libreoffice-fresh pandoc; \
 			echo ""; \
 			echo "Step 3: Configuring Docker for GPU support..."; \
-			sudo systemctl enable docker.service; \
-			sudo systemctl start docker.service; \
+			if command -v docker &> /dev/null; then \
+				sudo systemctl enable docker.service; \
+				sudo systemctl start docker.service; \
+			else \
+				echo "✗ Docker installation failed - skipping configuration"; \
+				exit 1; \
+			fi; \
 			if command -v nvidia-ctk &> /dev/null; then \
 				sudo nvidia-ctk runtime configure --runtime=docker; \
 				sudo systemctl restart docker; \
@@ -221,8 +216,8 @@ endif
 format:
 	@echo "Formatting Python code with ruff..."
 	@if [ -f $(RUFF) ]; then \
-		echo "Formatting: qdrant_rag.py, setup.py"; \
-		$(RUFF) format $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py; \
+		echo "Formatting: qdrant_rag.py"; \
+		$(RUFF) format $(PROJECT_DIR)/qdrant_rag.py; \
 		echo "Checking shell scripts..."; \
 		if command -v shellcheck &> /dev/null; then \
 			shellcheck $(PROJECT_DIR)/install.sh || true; \
@@ -236,7 +231,7 @@ format:
 lint:
 	@echo "Linting Python code and fixing issues..."
 	@if [ -f $(RUFF) ]; then \
-		$(RUFF) check $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py --fix; \
+		$(RUFF) check $(PROJECT_DIR)/qdrant_rag.py --fix; \
 		echo "Checking pyproject.toml..."; \
 		if [ -f $(PROJECT_DIR)/pyproject.toml ]; then \
 			$(PYTHON) -m pip show toml-sort &>/dev/null && toml-sort -c $(PROJECT_DIR)/pyproject.toml || echo "Note: Install toml-sort for TOML validation"; \
@@ -248,7 +243,7 @@ lint:
 typecheck:
 	@echo "Running type checking on Python files..."
 	@if [ -f $(MYPY) ]; then \
-		$(MYPY) $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py --ignore-missing-imports; \
+		$(MYPY) $(PROJECT_DIR)/qdrant_rag.py --ignore-missing-imports; \
 	else \
 		echo "Error: mypy not found. Run 'make install' first."; exit 1; \
 	fi
@@ -287,7 +282,7 @@ validate:
 	@echo "=== Comprehensive Project Validation ==="
 	@echo ""
 	@echo "Python files:"
-	@for file in $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py; do \
+	@for file in $(PROJECT_DIR)/qdrant_rag.py; do \
 		if [ -f $$file ]; then \
 			echo "  ✓ $$file"; \
 		fi; \
@@ -295,11 +290,11 @@ validate:
 	@echo ""
 	@echo "Running Python checks..."
 	@if [ -f $(RUFF) ]; then \
-		$(RUFF) format --check $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py; \
-		$(RUFF) check $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py; \
+		$(RUFF) format --check $(PROJECT_DIR)/qdrant_rag.py; \
+		$(RUFF) check $(PROJECT_DIR)/qdrant_rag.py; \
 	fi
 	@if [ -f $(MYPY) ]; then \
-		$(MYPY) $(PROJECT_DIR)/qdrant_rag.py $(PROJECT_DIR)/setup.py --ignore-missing-imports; \
+		$(MYPY) $(PROJECT_DIR)/qdrant_rag.py --ignore-missing-imports; \
 	fi
 	@echo ""
 	@echo "Configuration files:"
@@ -378,4 +373,5 @@ clean:
 	@find $(PROJECT_DIR) -type f -name '*.pyc' -delete 2>/dev/null || true
 	@rm -rf $(PROJECT_DIR)/.ruff_cache $(PROJECT_DIR)/.mypy_cache $(PROJECT_DIR)/.pytest_cache 
 	@rm -rf $(PROJECT_DIR)/htmlcov $(PROJECT_DIR)/build $(PROJECT_DIR)/dist $(PROJECT_DIR)/*.egg-info
+	@rm -f $(PROJECT_DIR)/*.html
 	@echo "Cleanup complete. Run 'make stop-qdrant' to stop the database."

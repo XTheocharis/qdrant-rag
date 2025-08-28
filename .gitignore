@@ -68,3 +68,4 @@ queries.json
 # Documentation
 docs/_build/
 *.html
+CLAUDE.md

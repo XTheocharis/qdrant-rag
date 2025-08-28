@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""High-Performance Hybrid RAG Pipeline using Qdrant.
+"""Hybrid RAG Pipeline using Qdrant.
 
 Hardware Target: AMD 9950X3D + RTX 5070 Ti + 64GB RAM + Gen5 NVMe + CachyOS
 
@@ -14,31 +14,32 @@ import os
 import sys
 from pathlib import Path
 
+
 def ensure_venv():
     """Auto-activate the project's virtual environment if not already active."""
     script_dir = Path(__file__).resolve().parent
     venv_dir = script_dir / ".venv"
     venv_python = venv_dir / "bin" / "python" if os.name != 'nt' else venv_dir / "Scripts" / "python.exe"
-    
+
     # Check if we're running with the correct Python by checking executable path
     # Don't resolve symlinks as venv python points to system python
     current_python = Path(sys.executable)
-    
+
     # If we're already using the venv's Python, we're good
     if str(current_python) == str(venv_python):
         return  # Already using correct Python
-    
+
     # Check if venv exists
     if not venv_dir.exists():
         print(f"Error: Virtual environment not found at {venv_dir}")
         print("Please run 'make install' first to set up the environment.")
         sys.exit(1)
-    
+
     if not venv_python.exists():
         print(f"Error: Python executable not found at {venv_python}")
         print("Virtual environment may be corrupted. Run 'make clean && make install'")
         sys.exit(1)
-    
+
     # Re-launch the script with the venv's Python
     print(f"Auto-activating virtual environment: {venv_dir}")
     os.execv(str(venv_python), [str(venv_python)] + sys.argv)
@@ -63,6 +64,63 @@ def load_env():
 
 load_env()
 
+# Check for required dependencies before importing
+def check_dependencies():
+    """Check if required dependencies are installed and show README if not."""
+    required_packages = [
+        'onnxruntime',
+        'psutil',
+        'pynvml',
+        'datasketch',
+        'fastembed',
+        'google.genai',
+        'llama_index',
+        'qdrant_client',
+        'sentence_transformers',
+        'torch',
+        'unstructured'
+    ]
+
+    missing = []
+    for package in required_packages:
+        try:
+            if '.' in package:
+                # Handle nested imports like google.genai
+                parts = package.split('.')
+                __import__(parts[0])
+                mod = sys.modules[parts[0]]
+                for part in parts[1:]:
+                    mod = getattr(mod, part)
+            else:
+                __import__(package)
+        except (ImportError, AttributeError):
+            missing.append(package)
+
+    if missing:
+        readme_path = Path(__file__).resolve().parent / "README.md"
+        if readme_path.exists():
+            import subprocess
+            # Use 'less' with fallback to 'more'
+            pager = 'less' if subprocess.run(['which', 'less'], capture_output=True).returncode == 0 else 'more'
+            try:
+                subprocess.run([pager, str(readme_path)])
+            except (FileNotFoundError, subprocess.SubprocessError):
+                # Fallback to cat if no pager available
+                with open(readme_path) as f:
+                    print(f.read())
+        else:
+            print("Dependencies missing and README.md not found.")
+
+        print(f"\nMissing dependencies: {', '.join(missing)}")
+        print("\nPlease run the following commands:")
+        print("  make installdeps  # Install system dependencies")
+        print("  make install      # Install Python packages")
+        sys.exit(1)
+
+check_dependencies()
+
+# Imports after dependency check - suppress E402 warnings
+# ruff: noqa: E402
 import argparse
 import asyncio
 import json
@@ -78,7 +136,6 @@ from concurrent.futures import (
     as_completed,
 )
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Optional
 
 import onnxruntime as ort
@@ -1153,7 +1210,7 @@ class QdrantEvaluator:
 def main_cli():
     """Command-line interface entry point for the RAG pipeline."""
     parser = argparse.ArgumentParser(
-        description="High-Performance RAG Pipeline"
+        description="RAG Pipeline"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
