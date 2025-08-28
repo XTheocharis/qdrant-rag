@@ -1,7 +1,7 @@
 VENV_DIR := .venv
 PYTHON := $(VENV_DIR)/bin/python
 PIP := $(VENV_DIR)/bin/pip
-QDRANT_CONTAINER_NAME := qdrant_pipeline
+QDRANT_CONTAINER_NAME := qdrant_rag
 QDRANT_IMAGE := qdrant/qdrant:gpu-nvidia-latest
 
 .PHONY: help install setup-qdrant start-qdrant stop-qdrant logs-qdrant ingest search evaluate-quantization clean
@@ -56,14 +56,14 @@ ifndef src
 	$(error "Usage: make ingest src=<path_to_source_directory>")
 endif
 	@source activate.sh && \
-	$(PYTHON) qdrant_pipeline.py ingest --source $(src)
+	$(PYTHON) qdrant_rag.py ingest --source $(src)
 
 search:
 ifndef query
 	$(error "Usage: make search query=\"<your_search_query>\"")
 endif
 	@source activate.sh && \
-	$(PYTHON) qdrant_pipeline.py search --query "$(query)"
+	$(PYTHON) qdrant_rag.py search --query "$(query)"
 
 evaluate-quantization:
 ifndef src
@@ -74,12 +74,12 @@ endif
 	@echo "Created sample 'queries.json'. Please edit it with relevant queries for your data."
 	@read -p "Press Enter to continue with the evaluation..."
 	@source activate.sh && \
-	$(PYTHON) qdrant_pipeline.py evaluate-quantization --source $(src) --queries-file queries.json
+	$(PYTHON) qdrant_rag.py evaluate-quantization --source $(src) --queries-file queries.json
 
 clean:
 	@echo "Cleaning up project..."
 	@rm -rf $(VENV_DIR)
 	@rm -f .env
-	@rm -f qdrant_pipeline.log
+	@rm -f qdrant_rag.log
 	@rm -f queries.json
 	@echo "Cleanup complete. Run 'make stop-qdrant' to stop the database."
