@@ -73,7 +73,7 @@ def check_dependencies():
         'pynvml',
         'datasketch',
         'fastembed',
-        'google.genai',
+        'google.genai',  # This is the actual module we import
         'llama_index',
         'qdrant_client',
         'sentence_transformers',
@@ -84,8 +84,11 @@ def check_dependencies():
     missing = []
     for package in required_packages:
         try:
-            if '.' in package:
-                # Handle nested imports like google.genai
+            if package == 'google.genai':
+                # Special handling for google.genai which is a submodule
+                import google.genai
+            elif '.' in package:
+                # Handle other nested imports
                 parts = package.split('.')
                 __import__(parts[0])
                 mod = sys.modules[parts[0]]
@@ -473,9 +476,9 @@ class Embedder:
                 )
                 return
 
+            # SPLADE uses ONNX and can utilize GPU
             splade_providers = self.splade_embedder.model.model.get_providers()
-            bm25_providers = self.bm25_embedder.model.model.get_providers()
-
+            
             if "CUDAExecutionProvider" in splade_providers:
                 logger.info(
                     "SUCCESS: FastEmbed SPLADE is actively using GPU (CUDAExecutionProvider)."
@@ -484,15 +487,9 @@ class Embedder:
                 logger.warning(
                     f"FastEmbed SPLADE is NOT using GPU. Active providers: {splade_providers}"
                 )
-
-            if "CUDAExecutionProvider" in bm25_providers:
-                logger.info(
-                    "SUCCESS: FastEmbed BM25 is actively using GPU (CUDAExecutionProvider)."
-                )
-            else:
-                logger.warning(
-                    f"FastEmbed BM25 is NOT using GPU. Active providers: {bm25_providers}"
-                )
+            
+            # BM25 is a traditional algorithm, doesn't use ONNX/GPU
+            logger.info("BM25 is a lexical algorithm and doesn't use GPU acceleration.")
 
     async def _rate_limited_gemini_batch_request(
         self, texts: list[str], task_type: str
@@ -752,7 +749,7 @@ class DocumentProcessor:
             metadata["content_type"] = "markup"
         else:  # Documents
             elements = unstructured_partition(
-                file_path=str(file_path), strategy=unstructured_strategy
+                filename=str(file_path), strategy=unstructured_strategy
             )
             content = self._normalize_and_clean(
                 "\n\n".join(
@@ -979,7 +976,7 @@ class MaxPerformancePipeline:
         metrics.total_files = len(files)
 
         all_chunks = []
-        with ProcessPoolExecutor(
+        with ThreadPoolExecutor(
             max_workers=self.config.cpu_threads
         ) as executor:
             futures = [
