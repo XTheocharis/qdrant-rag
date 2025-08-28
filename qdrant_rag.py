@@ -1556,27 +1556,18 @@ def install_system_dependencies():
 
 
 def setup_qdrant_directories(project_dir: Path):
-    """Create local directory for Qdrant data and copy config if needed."""
+    """Create local directory for Qdrant data."""
     print("Setting up Qdrant data directory...")
     
     data_dir = project_dir / "qdrant_data"
     data_dir.mkdir(exist_ok=True)
     data_dir.chmod(0o755)
     
-    # Copy config.yaml from project root to qdrant_data if it doesn't exist
-    source_config = project_dir / "config.yaml"
-    dest_config = data_dir / "config.yaml"
-    
-    if not dest_config.exists():
-        if source_config.exists():
-            shutil.copy2(source_config, dest_config)
-            print(f"Copied config.yaml to {data_dir}")
-        else:
-            # Fallback: create a default config if source doesn't exist
-            dest_config.write_text("storage:\n  performance:\n    async_scorer: true\n")
-            print(f"Created default config.yaml in {data_dir}")
-    else:
-        print(f"Using existing config.yaml in {data_dir}")
+    # Ensure config.yaml exists in project root
+    config_file = project_dir / "config.yaml"
+    if not config_file.exists():
+        config_file.write_text("storage:\n  performance:\n    async_scorer: true\n")
+        print("Created default config.yaml in project root")
     
     print("Qdrant data directory ready.")
 
@@ -1602,7 +1593,7 @@ def start_qdrant_container(project_dir: Path):
         "--gpus", "all",
         "--user", f"{uid}:{gid}",
         "-v", f"{project_dir}/qdrant_data:/qdrant/storage",
-        "-v", f"{project_dir}/qdrant_data/config.yaml:/qdrant/config/config.yaml:ro",
+        "-v", f"{project_dir}/config.yaml:/qdrant/config/config.yaml:ro",
         "-e", "QDRANT__GPU__INDEXING=1",
         image
     ]
