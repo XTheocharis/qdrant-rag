@@ -1,5 +1,5 @@
 [project]
-name = "qdrant-max-performance-pipeline"
+name = "qdrant-rag"
 version = "1.0.0"
 description = "Qdrant RAG Pipeline for AMD 9950X3D + RTX 5070 Ti"
 requires-python = ">=3.9"
