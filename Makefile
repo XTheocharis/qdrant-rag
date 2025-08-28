@@ -73,7 +73,7 @@ install:
 	@echo ""
 	@echo "Installing full dependencies (this may take several minutes)..."
 	@if command -v uv &> /dev/null; then \
-		uv pip install --python $(PYTHON) -e ".[dev]"; \
+		QDRANT_RAG_INSTALLING=1 uv pip install --python $(PYTHON) -e ".[dev]"; \
 		echo "Installing PyTorch with CUDA support..."; \
 		uv pip install --python $(PYTHON) torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
 		echo ""; \
@@ -81,7 +81,7 @@ install:
 		uv pip uninstall --python $(PYTHON) -y onnxruntime 2>/dev/null || true; \
 		uv pip install --python $(PYTHON) --force-reinstall onnxruntime-gpu; \
 	else \
-		$(PYTHON) -m pip install -e ".[dev]"; \
+		QDRANT_RAG_INSTALLING=1 $(PYTHON) -m pip install -e ".[dev]"; \
 		$(PYTHON) -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
 		echo ""; \
 		echo "Handling ONNX Runtime GPU setup..."; \
@@ -175,17 +175,21 @@ setup-qdrant:
 	@echo "Creating local directories for Qdrant data and config..."
 	@mkdir -p $(PROJECT_DIR)/qdrant_data
 	@mkdir -p $(PROJECT_DIR)/qdrant_config
+	@# Ensure directories have proper permissions for current user
+	@chmod 755 $(PROJECT_DIR)/qdrant_data $(PROJECT_DIR)/qdrant_config
 	@printf "storage:\n  performance:\n    async_scorer: true\n" > $(PROJECT_DIR)/qdrant_config/config.yaml
-	@echo "Qdrant directories and config created."
+	@echo "Qdrant directories and config created with user permissions."
 
 start-qdrant: setup-qdrant
 	@echo "Starting Qdrant Docker container with GPU support..."
+	@# Run container with current user's UID/GID to avoid permission issues
 	@docker run -d --name $(QDRANT_CONTAINER_NAME) --network host --gpus all \
+	  --user $(shell id -u):$(shell id -g) \
 	  -v $(CURDIR)/qdrant_data:/qdrant/storage \
 	  -v $(CURDIR)/qdrant_config:/qdrant/config \
 	  -e QDRANT__GPU__INDEXING=1 \
 	  $(QDRANT_IMAGE)
-	@echo "Qdrant container is starting on host network (port 6333). Use 'make logs-qdrant' to monitor."
+	@echo "Qdrant container is starting on host network (port 6333) with user permissions. Use 'make logs-qdrant' to monitor."
 
 stop-qdrant:
 	@echo "Stopping and removing Qdrant Docker container..."
@@ -200,6 +204,8 @@ erasedata:
 	@echo "⚠️  WARNING: This will permanently delete all Qdrant vector data!"
 	@read -p "Are you sure you want to delete qdrant_data/? Type 'yes' to confirm: " confirm && \
 	if [ "$$confirm" = "yes" ]; then \
+		echo "Stopping Qdrant container if running..."; \
+		docker stop $(QDRANT_CONTAINER_NAME) 2>/dev/null || true; \
 		echo "Removing Qdrant data directory..."; \
 		rm -rf $(PROJECT_DIR)/qdrant_data; \
 		echo "✓ Qdrant data erased."; \
@@ -211,6 +217,8 @@ eraseconfig:
 	@echo "⚠️  WARNING: This will delete Qdrant configuration!"
 	@read -p "Are you sure you want to delete qdrant_config/? Type 'yes' to confirm: " confirm && \
 	if [ "$$confirm" = "yes" ]; then \
+		echo "Stopping Qdrant container if running..."; \
+		docker stop $(QDRANT_CONTAINER_NAME) 2>/dev/null || true; \
 		echo "Removing Qdrant config directory..."; \
 		rm -rf $(PROJECT_DIR)/qdrant_config; \
 		echo "✓ Qdrant config erased."; \
@@ -397,7 +405,8 @@ clean:
 	@echo "Cleaning up project..."
 	@rm -rf $(VENV_DIR)
 	@rm -f $(PROJECT_DIR)/.env
-	@rm -f $(PROJECT_DIR)/qdrant_rag.log
+	@rm -f $(PROJECT_DIR)/*.log
+	@rm -f $(PROJECT_DIR)/*.whl
 	@rm -f $(PROJECT_DIR)/queries.json
 	@rm -rf $(PROJECT_DIR)/.tmp
 	@find $(PROJECT_DIR) -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true

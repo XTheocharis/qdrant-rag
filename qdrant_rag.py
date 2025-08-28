@@ -7,13 +7,187 @@ Implements the complete 3-Index Hybrid Search architecture:
 1. Vector Index (Dense Gemini + Sparse SPLADE)
 2. Full-Text Index (Sparse BM25)
 3. Payload Index (Structured Metadata)
+
+This file also serves as its own PEP 517 build backend when called by pip.
 """
 
-# Auto-activate virtual environment if not already active
 import os
 import sys
 from pathlib import Path
 
+# ============================================================================
+# BUILD BACKEND MODE - Handle pip install operations
+# ============================================================================
+
+# Detect if we're being called as a build backend by pip
+# Check for build environment indicators
+_IS_BUILD_BACKEND = False
+
+# Method 1: Check for explicit environment variable
+if os.environ.get('PEP517_BUILD_BACKEND') == '1':
+    _IS_BUILD_BACKEND = True
+
+# Method 2: Check if pep517 or build modules are loaded  
+elif 'pep517' in sys.modules or '_in_process' in sys.modules or 'build' in sys.modules:
+    _IS_BUILD_BACKEND = True
+
+# Method 3: Check if being imported by setuptools/pip
+elif __name__ != "__main__":
+    # Being imported rather than executed
+    # Check who's importing us
+    import inspect
+    frame = inspect.currentframe()
+    if frame and frame.f_back and frame.f_back.f_code:
+        filename = frame.f_back.f_code.co_filename
+        if any(x in filename for x in ['setuptools', 'pip', 'pep517', 'build']):
+            _IS_BUILD_BACKEND = True
+
+if _IS_BUILD_BACKEND:
+    """
+    PEP 517 Build Backend Mode
+    
+    When this script is called as a build backend (via pip install),
+    expose the necessary PEP 517 hooks and handle installation.
+    """
+    import subprocess
+    from typing import Optional
+    
+    # Import setuptools build backend to delegate most operations
+    try:
+        from setuptools import build_meta as _orig
+    except ImportError:
+        print("ERROR: setuptools>=64.0 required for build backend", file=sys.stderr)
+        sys.exit(1)
+    
+    # Re-export standard PEP 517 hooks
+    def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+        return _orig.prepare_metadata_for_build_wheel(metadata_directory, config_settings)
+    
+    def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+        return _orig.build_wheel(wheel_directory, config_settings, metadata_directory)
+    
+    def build_sdist(sdist_directory, config_settings=None):
+        return _orig.build_sdist(sdist_directory, config_settings)
+    
+    def get_requires_for_build_wheel(config_settings=None):
+        return _orig.get_requires_for_build_wheel(config_settings)
+    
+    def get_requires_for_build_sdist(config_settings=None):
+        return _orig.get_requires_for_build_sdist(config_settings)
+    
+    # PEP 660 hooks for editable installs
+    if hasattr(_orig, "build_editable"):
+        _original_build_editable = _orig.build_editable
+        _original_get_requires = _orig.get_requires_for_build_editable
+        _original_prepare_metadata = _orig.prepare_metadata_for_build_editable
+    else:
+        _original_build_editable = None
+        _original_get_requires = None
+        _original_prepare_metadata = None
+    
+    def get_requires_for_build_editable(config_settings=None):
+        """Get requirements for building editable install."""
+        if _original_get_requires:
+            return _original_get_requires(config_settings)
+        return []
+    
+    def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+        """Prepare metadata for editable install."""
+        if _original_prepare_metadata:
+            return _original_prepare_metadata(metadata_directory, config_settings)
+        raise NotImplementedError("Editable installs require setuptools >= 64.0.0")
+    
+    def run_make_install():
+        """Execute 'make install' when doing editable install."""
+        # Prevent recursion if already installing
+        if os.environ.get("QDRANT_RAG_INSTALLING") == "1":
+            print("Skipping make install - already running", file=sys.stderr)
+            return False
+        
+        project_dir = Path(__file__).parent.absolute()
+        makefile = project_dir / "Makefile"
+        
+        if not makefile.exists():
+            print("Note: Makefile not found, skipping make install", file=sys.stderr)
+            return False
+        
+        # Log the installation
+        log_file = project_dir / "pip_install.log"
+        with open(log_file, "a") as f:
+            f.write("\n" + "="*60 + "\n")
+            f.write("Self-contained build: Executing 'make install'...\n")
+            f.write("="*60 + "\n\n")
+        
+        try:
+            env = os.environ.copy()
+            env["QDRANT_RAG_INSTALLING"] = "1"
+            
+            result = subprocess.run(
+                ["make", "install"],
+                cwd=str(project_dir),
+                check=False,
+                capture_output=False,
+                text=True,
+                env=env
+            )
+            
+            if result.returncode == 0:
+                with open(log_file, "a") as f:
+                    f.write("✅ Successfully completed 'make install'\n")
+                return True
+            else:
+                with open(log_file, "a") as f:
+                    f.write(f"⚠️ 'make install' exited with code {result.returncode}\n")
+                return False
+        except FileNotFoundError:
+            print("⚠️ 'make' not found. Run 'make install' manually.", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"⚠️ Could not run 'make install': {e}", file=sys.stderr)
+            return False
+    
+    def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+        """Build editable wheel and trigger make install."""
+        # Run make install for comprehensive setup
+        run_make_install()
+        
+        # Delegate to setuptools
+        if _original_build_editable:
+            return _original_build_editable(wheel_directory, config_settings, metadata_directory)
+        else:
+            raise NotImplementedError("Editable installs require setuptools >= 64.0.0")
+    
+    # If we're in build backend mode, stop here - don't run the rest of the script
+    # The build backend functions are now available for pip to use
+    __all__ = [
+        'prepare_metadata_for_build_wheel',
+        'build_wheel', 
+        'build_sdist',
+        'get_requires_for_build_wheel',
+        'get_requires_for_build_sdist',
+        'get_requires_for_build_editable',
+        'prepare_metadata_for_build_editable',
+        'build_editable'
+    ]
+    
+    # Exit build backend mode - don't execute runtime code
+    if __name__ == "__main__":
+        # Direct execution during build - just exit
+        sys.exit(0)
+    # If being imported as a module, the functions are now available
+    # but we still don't want to run the rest of the script
+    
+else:
+    # ============================================================================
+    # RUNTIME MODE - Normal script execution
+    # ============================================================================
+    
+    # Only execute the rest of the script if NOT in build backend mode
+    # This is where all the normal runtime code goes
+    pass  # Continue with normal execution below
+
+# The rest of the file continues normally, but we guard the execution parts
+# Auto-activate virtual environment if not already active
 
 def ensure_venv():
     """Auto-activate the project's virtual environment if not already active."""
@@ -44,8 +218,9 @@ def ensure_venv():
     print(f"Auto-activating virtual environment: {venv_dir}")
     os.execv(str(venv_python), [str(venv_python)] + sys.argv)
 
-# Ensure we're in the venv before importing dependencies
-ensure_venv()
+# Ensure we're in the venv before importing dependencies (only in runtime mode)
+if not _IS_BUILD_BACKEND:
+    ensure_venv()
 
 # Auto-load .env file if it exists
 def load_env():
@@ -62,7 +237,8 @@ def load_env():
                         value = value.strip().strip('"').strip("'")
                         os.environ[key] = value
 
-load_env()
+if not _IS_BUILD_BACKEND:
+    load_env()
 
 # Check for required dependencies before importing
 def check_dependencies():
@@ -120,7 +296,8 @@ def check_dependencies():
         print("  make install      # Install Python packages")
         sys.exit(1)
 
-check_dependencies()
+if not _IS_BUILD_BACKEND:
+    check_dependencies()
 
 # Imports after dependency check - suppress E402 warnings
 # ruff: noqa: E402
@@ -1266,5 +1443,5 @@ def main_cli():
         pipeline.close()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not _IS_BUILD_BACKEND:
     main_cli()
