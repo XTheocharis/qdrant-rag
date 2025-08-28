@@ -12,6 +12,8 @@ This file also serves as its own PEP 517 build backend when called by pip.
 """
 
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -203,10 +205,13 @@ def ensure_venv():
     if str(current_python) == str(venv_python):
         return  # Already using correct Python
 
-    # Check if venv exists
+    # Check if venv exists - but allow install, installdeps, and help commands
     if not venv_dir.exists():
+        # Check if user is trying to run install, installdeps, verify, or help
+        if len(sys.argv) > 1 and sys.argv[1] in ['install', 'installdeps', 'verify', '--help', '-h', 'help']:
+            return  # Allow these commands without venv
         print(f"Error: Virtual environment not found at {venv_dir}")
-        print("Please run 'make install' first to set up the environment.")
+        print("Please run './qdrant_rag.py install' first to set up the environment.")
         sys.exit(1)
 
     if not venv_python.exists():
@@ -1381,12 +1386,500 @@ class QdrantEvaluator:
         logger.info("-" * 50)
 
 
+def handle_management_command(command: str, args):
+    """Handle management commands that don't need the pipeline."""
+    project_dir = Path(__file__).parent.absolute()
+    venv_dir = project_dir / ".venv"
+    python_exec = venv_dir / "bin" / "python"
+    pip_exec = venv_dir / "bin" / "pip"
+    
+    if command == "install":
+        install_python_environment(project_dir, venv_dir, python_exec, pip_exec)
+    elif command == "installdeps":
+        install_system_dependencies()
+    elif command == "start-qdrant":
+        start_qdrant_container(project_dir)
+    elif command == "stop-qdrant":
+        stop_qdrant_container()
+    elif command == "logs-qdrant":
+        show_qdrant_logs()
+    elif command == "setup-qdrant":
+        setup_qdrant_directories(project_dir)
+    elif command == "format":
+        run_code_formatter(project_dir, venv_dir)
+    elif command == "lint":
+        run_linter(project_dir, venv_dir)
+    elif command == "typecheck":
+        run_type_checker(project_dir, venv_dir)
+    elif command == "check":
+        run_linter(project_dir, venv_dir)
+        run_type_checker(project_dir, venv_dir)
+    elif command == "test":
+        run_tests(project_dir, venv_dir)
+    elif command == "qa":
+        run_code_formatter(project_dir, venv_dir)
+        run_linter(project_dir, venv_dir)
+        run_type_checker(project_dir, venv_dir)
+        run_tests(project_dir, venv_dir)
+    elif command == "verify":
+        verify_installation(venv_dir, project_dir)
+    elif command == "clean":
+        clean_project(project_dir, venv_dir)
+    elif command == "erasedata":
+        erase_qdrant_data(project_dir, args.yes if hasattr(args, 'yes') else False)
+
+
+def install_python_environment(project_dir: Path, venv_dir: Path, python_exec: Path, pip_exec: Path):
+    """Install Python virtual environment and dependencies."""
+    print("=== Python Environment Setup ===")
+    
+    # Create virtual environment if it doesn't exist
+    if not venv_dir.exists():
+        print(f"Creating virtual environment at {venv_dir}...")
+        if shutil.which("uv"):
+            subprocess.run(["uv", "venv", str(venv_dir)], check=True)
+            subprocess.run(["uv", "pip", "install", "--python", str(python_exec), "pip"], check=True)
+        else:
+            subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+            subprocess.run([str(python_exec), "-m", "pip", "install", "--upgrade", "pip"], check=True)
+    else:
+        print(f"Using existing virtual environment at {venv_dir}")
+    
+    print("\nInstalling development tools (ruff, mypy, pytest)...")
+    tools = ["ruff", "mypy", "pytest", "pytest-asyncio", "pytest-cov", "build", "datasketch"]
+    if shutil.which("uv"):
+        subprocess.run(["uv", "pip", "install", "--python", str(python_exec)] + tools, check=True)
+    else:
+        subprocess.run([str(python_exec), "-m", "pip", "install"] + tools, check=True)
+    
+    print("\nInstalling full dependencies (this may take several minutes)...")
+    env = os.environ.copy()
+    env["QDRANT_RAG_INSTALLING"] = "1"
+    
+    if shutil.which("uv"):
+        subprocess.run(["uv", "pip", "install", "--python", str(python_exec), "-e", f"{project_dir}[dev]"], 
+                      env=env, check=True)
+        print("Installing PyTorch with CUDA support...")
+        subprocess.run(["uv", "pip", "install", "--python", str(python_exec), "torch", "torchvision",
+                       "--index-url", "https://download.pytorch.org/whl/cu121"], check=True)
+        print("\nHandling ONNX Runtime GPU setup...")
+        subprocess.run(["uv", "pip", "uninstall", "--python", str(python_exec), "-y", "onnxruntime"],
+                      capture_output=True)
+        subprocess.run(["uv", "pip", "install", "--python", str(python_exec), "--force-reinstall", 
+                       "onnxruntime-gpu"], check=True)
+    else:
+        subprocess.run([str(python_exec), "-m", "pip", "install", "-e", f"{project_dir}[dev]"], 
+                      env=env, check=True)
+        subprocess.run([str(python_exec), "-m", "pip", "install", "torch", "torchvision",
+                       "--index-url", "https://download.pytorch.org/whl/cu121"], check=True)
+        subprocess.run([str(python_exec), "-m", "pip", "uninstall", "-y", "onnxruntime"],
+                      capture_output=True)
+        subprocess.run([str(python_exec), "-m", "pip", "install", "--force-reinstall", 
+                       "onnxruntime-gpu"], check=True)
+    
+    print(f"\n✅ Python environment ready at {venv_dir}")
+    print("\nNext steps:")
+    print("  • Copy .env.example to .env and add your API keys")
+    print("  • Run './qdrant_rag.py verify' to check GPU acceleration")
+    print("  • Run './qdrant_rag.py start-qdrant' to start the database")
+
+
+def install_system_dependencies():
+    """Install system dependencies (Docker, CUDA, etc)."""
+    print("=== System Dependencies Installation ===")
+    print("This will install:")
+    print("  • uv (fast Python package manager)")
+    print("  • Docker with GPU support")
+    print("  • NVIDIA drivers and CUDA toolkit")
+    print("  • System libraries for document processing")
+    print("  • Hardware monitoring tools")
+    print("\nRequires sudo access. Designed for Arch-based systems.")
+    
+    response = input("\nContinue? [y/N] ")
+    if response.lower() != 'y':
+        print("Installation cancelled.")
+        return
+    
+    # Install uv if not present
+    if not shutil.which("uv"):
+        print("\nStep 1: Installing uv package manager...")
+        subprocess.run("curl -LsSf https://astral.sh/uv/install.sh | sh", shell=True, check=True)
+        print("✓ uv installed to ~/.local/bin")
+        print("  Add to your PATH: export PATH=\"$HOME/.local/bin:$PATH\"")
+    else:
+        print(f"✓ uv is already installed")
+    
+    if shutil.which("pacman"):
+        print("\nStep 2: Installing system packages via pacman...")
+        packages = [
+            "python", "python-pip", "git", "curl", "wget", "unzip", "gcc", "make", "cmake", "pkg-config",
+            "libxml2", "libxslt", "bzip2", "lz4", "zstd", "openssl", "base-devel",
+            "htop", "iotop", "btop", "lm_sensors", "nvtop",
+            "docker", "nvidia", "nvidia-utils", "nvidia-settings", "cuda", "nvidia-container-toolkit",
+            "file", "poppler", "tesseract", "tesseract-data-eng", "libreoffice-fresh", "pandoc"
+        ]
+        subprocess.run(["sudo", "pacman", "-S", "--needed", "--noconfirm"] + packages, check=True)
+        
+        print("\nStep 3: Configuring Docker for GPU support...")
+        if shutil.which("docker"):
+            subprocess.run(["sudo", "systemctl", "enable", "docker.service"], check=True)
+            subprocess.run(["sudo", "systemctl", "start", "docker.service"], check=True)
+            
+            if shutil.which("nvidia-ctk"):
+                subprocess.run(["sudo", "nvidia-ctk", "runtime", "configure", "--runtime=docker"], check=True)
+                subprocess.run(["sudo", "systemctl", "restart", "docker"], check=True)
+            
+            # Check if user is in docker group
+            user = os.environ.get("USER")
+            groups_output = subprocess.run(["groups", user], capture_output=True, text=True)
+            if "docker" not in groups_output.stdout:
+                subprocess.run(["sudo", "usermod", "-aG", "docker", user], check=True)
+                print(f"⚠️  Added {user} to docker group. Please logout and login again.")
+            else:
+                print("✓ User already in docker group")
+        
+        print("\nStep 4: Configuring hardware sensors...")
+        subprocess.run(["sudo", "sensors-detect", "--auto"], capture_output=True)
+        
+        print("\n✅ System dependencies installed successfully!")
+        print("\nNext steps:")
+        print("  1. If you were added to docker group, logout and login again")
+        print("  2. Run './qdrant_rag.py install' to set up Python environment")
+    else:
+        print("This target is designed for Arch-based systems.")
+        print("Please install the required dependencies manually.")
+
+
+def setup_qdrant_directories(project_dir: Path):
+    """Create local directories for Qdrant data and config."""
+    print("Creating local directories for Qdrant data and config...")
+    
+    data_dir = project_dir / "qdrant_data"
+    config_dir = project_dir / "qdrant_config"
+    
+    data_dir.mkdir(exist_ok=True)
+    config_dir.mkdir(exist_ok=True)
+    
+    # Set proper permissions
+    data_dir.chmod(0o755)
+    config_dir.chmod(0o755)
+    
+    # Create config file
+    config_file = config_dir / "config.yaml"
+    config_file.write_text("storage:\n  performance:\n    async_scorer: true\n")
+    
+    print("Qdrant directories and config created with user permissions.")
+
+
+def start_qdrant_container(project_dir: Path):
+    """Start Qdrant Docker container with GPU support."""
+    # First ensure directories exist
+    setup_qdrant_directories(project_dir)
+    
+    print("Starting Qdrant Docker container with GPU support...")
+    
+    container_name = "qdrant_rag"
+    image = "qdrant/qdrant:gpu-nvidia-latest"
+    
+    # Get current user ID and group ID
+    uid = os.getuid()
+    gid = os.getgid()
+    
+    cmd = [
+        "docker", "run", "-d",
+        "--name", container_name,
+        "--network", "host",
+        "--gpus", "all",
+        "--user", f"{uid}:{gid}",
+        "-v", f"{project_dir}/qdrant_data:/qdrant/storage",
+        "-v", f"{project_dir}/qdrant_config:/qdrant/config",
+        "-e", "QDRANT__GPU__INDEXING=1",
+        image
+    ]
+    
+    subprocess.run(cmd, check=True)
+    print("Qdrant container is starting on host network (port 6333) with user permissions.")
+    print("Use './qdrant_rag.py logs-qdrant' to monitor.")
+
+
+def stop_qdrant_container():
+    """Stop and remove Qdrant Docker container."""
+    print("Stopping and removing Qdrant Docker container...")
+    container_name = "qdrant_rag"
+    
+    subprocess.run(["docker", "stop", container_name], capture_output=True)
+    subprocess.run(["docker", "rm", container_name], capture_output=True)
+    print("Qdrant container stopped and removed.")
+
+
+def show_qdrant_logs():
+    """Show Qdrant container logs."""
+    container_name = "qdrant_rag"
+    subprocess.run(["docker", "logs", "-f", container_name])
+
+
+def run_code_formatter(project_dir: Path, venv_dir: Path):
+    """Format Python code with ruff."""
+    ruff_exec = venv_dir / "bin" / "ruff"
+    
+    if not ruff_exec.exists():
+        print("Error: ruff not found. Run './qdrant_rag.py install' first.")
+        sys.exit(1)
+    
+    print("Formatting Python code with ruff...")
+    subprocess.run([str(ruff_exec), "format", str(project_dir / "qdrant_rag.py")], check=True)
+    print("Formatting complete.")
+
+
+def run_linter(project_dir: Path, venv_dir: Path):
+    """Lint Python code and fix issues."""
+    ruff_exec = venv_dir / "bin" / "ruff"
+    
+    if not ruff_exec.exists():
+        print("Error: ruff not found. Run './qdrant_rag.py install' first.")
+        sys.exit(1)
+    
+    print("Linting Python code and fixing issues...")
+    subprocess.run([str(ruff_exec), "check", str(project_dir / "qdrant_rag.py"), "--fix"], check=True)
+    print("Linting complete.")
+
+
+def run_type_checker(project_dir: Path, venv_dir: Path):
+    """Run type checking with mypy."""
+    mypy_exec = venv_dir / "bin" / "mypy"
+    
+    if not mypy_exec.exists():
+        print("Error: mypy not found. Run './qdrant_rag.py install' first.")
+        sys.exit(1)
+    
+    print("Running type checking on Python files...")
+    subprocess.run([str(mypy_exec), str(project_dir / "qdrant_rag.py"), "--ignore-missing-imports"], check=True)
+    print("Type checking complete.")
+
+
+def run_tests(project_dir: Path, venv_dir: Path):
+    """Run tests with pytest."""
+    pytest_exec = venv_dir / "bin" / "pytest"
+    
+    if not pytest_exec.exists():
+        print("Error: pytest not found. Run './qdrant_rag.py install' first.")
+        sys.exit(1)
+    
+    print("Running tests...")
+    tests_dir = project_dir / "tests"
+    if tests_dir.exists():
+        subprocess.run([str(pytest_exec), str(tests_dir), "-v"], cwd=project_dir)
+    else:
+        print("No tests found.")
+
+
+def verify_installation(venv_dir: Path, project_dir: Path):
+    """Verify GPU/CUDA and installation status."""
+    print("=== Installation Verification ===\n")
+    
+    python_exec = venv_dir / "bin" / "python"
+    
+    # Check Python
+    print("Python Environment:")
+    if python_exec.exists():
+        result = subprocess.run([str(python_exec), "--version"], capture_output=True, text=True)
+        print(f"  {result.stdout.strip()}")
+    else:
+        print("  ✗ Python not found")
+    print(f"  Virtual env: {venv_dir}\n")
+    
+    # Check GPU/CUDA
+    print("Testing GPU/CUDA availability...")
+    verification_script = '''
+import sys
+print("Python packages:")
+
+try:
+    import torch
+    print(f"  ✓ PyTorch {torch.__version__}")
+    if torch.cuda.is_available():
+        print(f"  ✓ CUDA available: {torch.cuda.get_device_name(0)}")
+        print(f"  ✓ CUDA version: {torch.version.cuda}")
+    else:
+        print("  ⚠ CUDA not available")
+except ImportError:
+    print("  ⚠ PyTorch not installed")
+
+try:
+    import onnxruntime as ort
+    print(f"  ✓ ONNX Runtime {ort.__version__}")
+    providers = ort.get_available_providers()
+    if "CUDAExecutionProvider" in providers:
+        print("  ✓ CUDA provider available for ONNX")
+    else:
+        print("  ⚠ CUDA provider not available for ONNX")
+except ImportError:
+    print("  ⚠ ONNX Runtime not installed")
+
+try:
+    import pynvml
+    pynvml.nvmlInit()
+    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+    gpu_name = pynvml.nvmlDeviceGetName(handle).decode("utf-8")
+    print(f"  ✓ GPU detected: {gpu_name}")
+    mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+    print(f"  ✓ GPU Memory: {mem_info.total / 1024**3:.1f} GB")
+    pynvml.nvmlShutdown()
+except:
+    print("  ⚠ Unable to detect GPU via pynvml")
+
+try:
+    import qdrant_client
+    print("  ✓ Qdrant client installed")
+except ImportError:
+    print("  ⚠ Qdrant client not installed")
+'''
+    
+    if python_exec.exists():
+        subprocess.run([str(python_exec), "-c", verification_script])
+    
+    # Check Docker
+    print("\nDocker Status:")
+    if shutil.which("docker"):
+        result = subprocess.run(["docker", "--version"], capture_output=True, text=True)
+        version = result.stdout.split()[2].rstrip(',')
+        print(f"  ✓ Docker installed: {version}")
+        
+        # Check if docker daemon is running
+        result = subprocess.run(["docker", "ps"], capture_output=True)
+        if result.returncode == 0:
+            print("  ✓ Docker daemon running")
+            
+            # Check if Qdrant container is running
+            result = subprocess.run(["docker", "ps"], capture_output=True, text=True)
+            if "qdrant_rag" in result.stdout:
+                print("  ✓ Qdrant container is running")
+            else:
+                print("  ⚠ Qdrant container not running (use './qdrant_rag.py start-qdrant')")
+        else:
+            print("  ✗ Docker daemon not accessible (check permissions)")
+    else:
+        print("  ✗ Docker not installed")
+    
+    # Check configuration files
+    print("\nConfiguration Files:")
+    env_file = project_dir / ".env"
+    env_example = project_dir / ".env.example"
+    
+    if env_file.exists():
+        print("  ✓ .env file exists")
+    else:
+        print("  ⚠ .env file missing (copy from .env.example)")
+    
+    if env_example.exists():
+        print("  ✓ .env.example exists")
+    else:
+        print("  ✗ .env.example missing")
+    
+    if os.access(project_dir / "qdrant_rag.py", os.X_OK):
+        print("  ✓ qdrant_rag.py is executable")
+    else:
+        print("  ✗ qdrant_rag.py not executable")
+    
+    print("\n=== Verification complete ===")
+
+
+def clean_project(project_dir: Path, venv_dir: Path):
+    """Remove virtual environment and generated files."""
+    print("Cleaning up project...")
+    
+    # Remove virtual environment
+    if venv_dir.exists():
+        shutil.rmtree(venv_dir)
+    
+    # Remove other files
+    files_to_remove = [
+        project_dir / ".env",
+        project_dir / "queries.json",
+    ]
+    
+    for file in files_to_remove:
+        if file.exists():
+            file.unlink()
+    
+    # Remove log files
+    for log_file in project_dir.glob("*.log"):
+        log_file.unlink()
+    
+    # Remove wheel files
+    for whl_file in project_dir.glob("*.whl"):
+        whl_file.unlink()
+    
+    # Remove cache directories
+    cache_dirs = [
+        project_dir / ".ruff_cache",
+        project_dir / ".mypy_cache",
+        project_dir / ".pytest_cache",
+        project_dir / "htmlcov",
+        project_dir / "build",
+        project_dir / "dist",
+        project_dir / ".tmp",
+    ]
+    
+    for cache_dir in cache_dirs:
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+    
+    # Remove __pycache__ directories
+    for pycache in project_dir.rglob("__pycache__"):
+        shutil.rmtree(pycache)
+    
+    # Remove .pyc files
+    for pyc_file in project_dir.rglob("*.pyc"):
+        pyc_file.unlink()
+    
+    # Remove egg-info directories
+    for egg_info in project_dir.glob("*.egg-info"):
+        shutil.rmtree(egg_info)
+    
+    # Remove HTML files
+    for html_file in project_dir.glob("*.html"):
+        html_file.unlink()
+    
+    print("Cleanup complete. Run './qdrant_rag.py stop-qdrant' to stop the database.")
+
+
+def erase_qdrant_data(project_dir: Path, skip_confirmation: bool = False):
+    """Delete all Qdrant vector data."""
+    if not skip_confirmation:
+        print("⚠️  WARNING: This will permanently delete all Qdrant vector data!")
+        response = input("Are you sure you want to delete qdrant_data/? Type 'yes' to confirm: ")
+        if response != "yes":
+            print("Operation cancelled.")
+            return
+    
+    print("Stopping Qdrant container if running...")
+    subprocess.run(["docker", "stop", "qdrant_rag"], capture_output=True)
+    
+    print("Removing Qdrant data directory...")
+    data_dir = project_dir / "qdrant_data"
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    
+    print("✓ Qdrant data erased.")
+
+
 def main_cli():
     """Command-line interface entry point for the RAG pipeline."""
     parser = argparse.ArgumentParser(
-        description="RAG Pipeline"
+        description="Qdrant RAG Pipeline - Self-contained vector search system with GPU acceleration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s install              # Set up Python environment and dependencies
+  %(prog)s start-qdrant         # Start Qdrant database with GPU support  
+  %(prog)s ingest --source ./docs  # Ingest documents
+  %(prog)s search --query "your search"  # Search indexed documents
+  %(prog)s verify               # Check GPU and installation status
+  %(prog)s format               # Format code with ruff
+"""
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
 
     ingest_parser = subparsers.add_parser(
         "ingest", help="Ingest documents from a source directory."
@@ -1424,9 +1917,74 @@ def main_cli():
         help="JSON file with a list of test queries.",
     )
 
-    args = parser.parse_args()
-    pipeline = MaxPerformancePipeline()
+    # Installation and setup commands
+    subparsers.add_parser(
+        "install", help="Create venv and install Python packages with GPU support"
+    )
+    subparsers.add_parser(
+        "installdeps", help="Install system dependencies (Docker, CUDA, etc)"
+    )
+    
+    # Docker/Qdrant management commands
+    subparsers.add_parser(
+        "start-qdrant", help="Start Qdrant Docker container with GPU support"
+    )
+    subparsers.add_parser(
+        "stop-qdrant", help="Stop and remove Qdrant Docker container"
+    )
+    subparsers.add_parser(
+        "logs-qdrant", help="View Qdrant container logs"
+    )
+    subparsers.add_parser(
+        "setup-qdrant", help="Create local directories for Qdrant data/config"
+    )
+    
+    # Development tools
+    subparsers.add_parser(
+        "format", help="Format Python code with ruff"
+    )
+    subparsers.add_parser(
+        "lint", help="Lint code and fix issues"
+    )
+    subparsers.add_parser(
+        "typecheck", help="Run type checking with mypy"
+    )
+    subparsers.add_parser(
+        "check", help="Run both lint and typecheck"
+    )
+    subparsers.add_parser(
+        "test", help="Run tests"
+    )
+    subparsers.add_parser(
+        "qa", help="Run format, check, and test"
+    )
+    
+    # Utility commands
+    subparsers.add_parser(
+        "verify", help="Verify GPU/CUDA and installation status"
+    )
+    subparsers.add_parser(
+        "clean", help="Remove virtual environment and generated files"
+    )
+    erase_data_parser = subparsers.add_parser(
+        "erasedata", help="⚠️ Delete all Qdrant vector data"
+    )
+    erase_data_parser.add_argument(
+        "--yes", action="store_true", help="Skip confirmation prompt"
+    )
 
+    args = parser.parse_args()
+
+    # Handle commands that don't need the pipeline
+    if args.command in ["install", "installdeps", "start-qdrant", "stop-qdrant", 
+                        "logs-qdrant", "setup-qdrant", "format", "lint", 
+                        "typecheck", "check", "test", "qa", "verify", 
+                        "clean", "erasedata"]:
+        handle_management_command(args.command, args)
+        return  # Exit after handling management command
+    
+    # Commands that need the pipeline
+    pipeline = MaxPerformancePipeline()
     try:
         if args.command == "ingest":
             asyncio.run(pipeline.ingest(args.source))
@@ -1438,7 +1996,6 @@ def main_cli():
                 queries = [item["query"] for item in json.load(f)]
             evaluator = QdrantEvaluator(pipeline)
             asyncio.run(evaluator.run_benchmark(args.source, queries))
-
     finally:
         pipeline.close()
 
