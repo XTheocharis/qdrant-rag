@@ -2,6 +2,10 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+py-modules = ["qdrant_rag"]
+packages = []
+
 [project]
 name = "qdrant-rag"
 version = "1.0.0"
@@ -27,7 +31,11 @@ dependencies = [
   # Embeddings & Reranking (GPU-enabled)
   "fastembed-gpu>=0.4.0",
   "onnxruntime-gpu>=1.18.0",
-  "sentence-transformers>=2.6.0"
+  "sentence-transformers>=2.6.0",
+  # Code parsing and AST support
+  "tree-sitter>=0.20.0",
+  "tree-sitter-languages>=1.10.0",
+  "llama-index-packs-code-hierarchy>=0.1.0"
 ]
 
 [project.scripts]

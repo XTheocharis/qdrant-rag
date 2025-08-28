@@ -76,9 +76,17 @@ install:
 		uv pip install --python $(PYTHON) -e ".[dev]"; \
 		echo "Installing PyTorch with CUDA support..."; \
 		uv pip install --python $(PYTHON) torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
+		echo ""; \
+		echo "Handling ONNX Runtime GPU setup..."; \
+		uv pip uninstall --python $(PYTHON) -y onnxruntime 2>/dev/null || true; \
+		uv pip install --python $(PYTHON) --force-reinstall onnxruntime-gpu; \
 	else \
 		$(PYTHON) -m pip install -e ".[dev]"; \
 		$(PYTHON) -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121; \
+		echo ""; \
+		echo "Handling ONNX Runtime GPU setup..."; \
+		$(PYTHON) -m pip uninstall -y onnxruntime 2>/dev/null || true; \
+		$(PYTHON) -m pip install --force-reinstall onnxruntime-gpu; \
 	fi
 	@echo ""
 	@echo "✅ Python environment ready at $(VENV_DIR)"
