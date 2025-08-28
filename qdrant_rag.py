@@ -1556,24 +1556,29 @@ def install_system_dependencies():
 
 
 def setup_qdrant_directories(project_dir: Path):
-    """Create local directories for Qdrant data and config."""
-    print("Creating local directories for Qdrant data and config...")
+    """Create local directory for Qdrant data and copy config if needed."""
+    print("Setting up Qdrant data directory...")
     
     data_dir = project_dir / "qdrant_data"
-    config_dir = project_dir / "qdrant_config"
-    
     data_dir.mkdir(exist_ok=True)
-    config_dir.mkdir(exist_ok=True)
-    
-    # Set proper permissions
     data_dir.chmod(0o755)
-    config_dir.chmod(0o755)
     
-    # Create config file
-    config_file = config_dir / "config.yaml"
-    config_file.write_text("storage:\n  performance:\n    async_scorer: true\n")
+    # Copy config.yaml from project root to qdrant_data if it doesn't exist
+    source_config = project_dir / "config.yaml"
+    dest_config = data_dir / "config.yaml"
     
-    print("Qdrant directories and config created with user permissions.")
+    if not dest_config.exists():
+        if source_config.exists():
+            shutil.copy2(source_config, dest_config)
+            print(f"Copied config.yaml to {data_dir}")
+        else:
+            # Fallback: create a default config if source doesn't exist
+            dest_config.write_text("storage:\n  performance:\n    async_scorer: true\n")
+            print(f"Created default config.yaml in {data_dir}")
+    else:
+        print(f"Using existing config.yaml in {data_dir}")
+    
+    print("Qdrant data directory ready.")
 
 
 def start_qdrant_container(project_dir: Path):
@@ -1597,7 +1602,7 @@ def start_qdrant_container(project_dir: Path):
         "--gpus", "all",
         "--user", f"{uid}:{gid}",
         "-v", f"{project_dir}/qdrant_data:/qdrant/storage",
-        "-v", f"{project_dir}/qdrant_config:/qdrant/config",
+        "-v", f"{project_dir}/qdrant_data/config.yaml:/qdrant/config/config.yaml:ro",
         "-e", "QDRANT__GPU__INDEXING=1",
         image
     ]

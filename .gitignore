@@ -60,7 +60,6 @@ dmypy.json
 .env
 *.log
 qdrant_data/
-qdrant_config/
 queries.json
 .tmp/
 .serena/
