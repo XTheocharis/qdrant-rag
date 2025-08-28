@@ -209,7 +209,7 @@ def ensure_venv():
     if not venv_dir.exists():
         # Check if user is trying to run management/setup commands
         management_commands = [
-            'install', 'verify', 'clean', 'qdrant', 'erase',
+            'install', 'verify', 'clean', 'qdrant',
             '--help', '-h', 'help'
         ]
         if len(sys.argv) > 1 and sys.argv[1] in management_commands:
@@ -1410,18 +1410,18 @@ def handle_management_command(command: str, args):
         install_python_packages(project_dir, venv_dir, python_exec, pip_exec)
     
     # Qdrant commands
+    elif command == "qdrant_install":
+        install_qdrant_docker_image()
     elif command == "qdrant_start":
         start_qdrant_container(project_dir)
     elif command == "qdrant_stop":
         stop_qdrant_container()
     elif command == "qdrant_logs":
         show_qdrant_logs()
-    
-    # Erase commands
-    elif command == "erase_data":
+    elif command == "qdrant_erase_data":
         erase_qdrant_data(project_dir, args.yes if hasattr(args, 'yes') else False)
-    elif command == "erase_logs":
-        erase_log_files(project_dir, args.yes if hasattr(args, 'yes') else False)
+    elif command == "qdrant_erase_collections":
+        erase_qdrant_collections(project_dir, args.yes if hasattr(args, 'yes') else False)
     
     # Development tools
     elif command == "format":
@@ -1521,25 +1521,65 @@ def install_dev_tools(project_dir: Path, venv_dir: Path, python_exec: Path):
     print("Available commands: format, lint, typecheck, test, qa")
 
 
-def erase_log_files(project_dir: Path, skip_confirmation: bool = False):
-    """Delete all log files."""
+def install_qdrant_docker_image():
+    """Pull the Qdrant Docker image with GPU support."""
+    print("=== Qdrant Docker Image Installation ===")
+    
+    # Check if Docker is available
+    if not shutil.which("docker"):
+        print("Error: Docker is not installed.")
+        print("Please run './qdrant_rag.py install system' to install Docker.")
+        return
+    
+    image = "qdrant/qdrant:gpu-nvidia-latest"
+    print(f"Pulling Qdrant Docker image: {image}")
+    print("This may take several minutes on first download...")
+    
+    try:
+        subprocess.run(["docker", "pull", image], check=True)
+        print(f"\n✅ Qdrant Docker image pulled successfully!")
+        print("You can now run './qdrant_rag.py qdrant start' to launch Qdrant.")
+    except subprocess.CalledProcessError:
+        print("\n❌ Failed to pull Docker image.")
+        print("Please check your internet connection and Docker installation.")
+
+
+def erase_qdrant_collections(project_dir: Path, skip_confirmation: bool = False):
+    """Delete all Qdrant collections (keeps container running)."""
     if not skip_confirmation:
-        print("⚠️  WARNING: This will delete all log files!")
+        print("⚠️  WARNING: This will delete all Qdrant collections!")
         response = input("Are you sure? Type 'yes' to confirm: ")
         if response != "yes":
             print("Operation cancelled.")
             return
     
-    print("Removing log files...")
-    count = 0
-    for log_file in project_dir.glob("*.log"):
-        log_file.unlink()
-        count += 1
+    print("Deleting all Qdrant collections...")
     
-    if count > 0:
-        print(f"✓ Deleted {count} log file(s)")
-    else:
-        print("No log files found.")
+    # Check if container is running
+    result = subprocess.run(["docker", "ps", "--filter", "name=qdrant_rag"], 
+                          capture_output=True, text=True)
+    if "qdrant_rag" not in result.stdout:
+        print("Qdrant container is not running.")
+        return
+    
+    # Use Qdrant API to list and delete collections
+    try:
+        from qdrant_client import QdrantClient
+        client = QdrantClient(url="http://localhost:6333")
+        
+        collections = client.get_collections().collections
+        if not collections:
+            print("No collections found.")
+            return
+        
+        for collection in collections:
+            client.delete_collection(collection.name)
+            print(f"  ✓ Deleted collection: {collection.name}")
+        
+        print(f"✓ Deleted {len(collections)} collection(s)")
+    except Exception as e:
+        print(f"Error accessing Qdrant: {e}")
+        print("Make sure Qdrant is running: './qdrant_rag.py qdrant start'")
 
 
 def install_system_dependencies():
@@ -1914,10 +1954,11 @@ def main_cli():
 Examples:
   %(prog)s install              # Install Python packages
   %(prog)s install all          # Full installation (system + dev + packages)
-  %(prog)s qdrant start         # Start Qdrant database with GPU support  
+  %(prog)s qdrant install       # Pull Qdrant Docker image
+  %(prog)s qdrant start         # Start Qdrant database  
+  %(prog)s qdrant erase data    # Erase all vector data
   %(prog)s ingest --source ./docs  # Ingest documents
   %(prog)s search --query "your search"  # Search indexed documents
-  %(prog)s verify               # Check GPU and installation status
 """
     )
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
@@ -1983,7 +2024,10 @@ Examples:
         dest="qdrant_action", required=True, help="Qdrant actions"
     )
     qdrant_subparsers.add_parser(
-        "start", help="Start Qdrant Docker container with GPU support"
+        "install", help="Pull Qdrant Docker image with GPU support"
+    )
+    qdrant_subparsers.add_parser(
+        "start", help="Start Qdrant Docker container"
     )
     qdrant_subparsers.add_parser(
         "stop", help="Stop and remove Qdrant Docker container"
@@ -1992,23 +2036,23 @@ Examples:
         "logs", help="View Qdrant container logs"
     )
     
-    # Erase commands with subcommands
-    erase_parser = subparsers.add_parser(
-        "erase", help="Erase data and logs"
+    # Qdrant erase subcommand with its own subcommands
+    qdrant_erase = qdrant_subparsers.add_parser(
+        "erase", help="Erase Qdrant data"
     )
-    erase_subparsers = erase_parser.add_subparsers(
-        dest="erase_type", required=True, help="What to erase"
+    qdrant_erase_subparsers = qdrant_erase.add_subparsers(
+        dest="erase_target", required=True, help="What to erase"
     )
-    erase_data = erase_subparsers.add_parser(
+    erase_data = qdrant_erase_subparsers.add_parser(
         "data", help="⚠️ Delete all Qdrant vector data"
     )
     erase_data.add_argument(
         "--yes", action="store_true", help="Skip confirmation prompt"
     )
-    erase_logs = erase_subparsers.add_parser(
-        "logs", help="Delete all log files"
+    erase_collections = qdrant_erase_subparsers.add_parser(
+        "collections", help="Delete all Qdrant collections"
     )
-    erase_logs.add_argument(
+    erase_collections.add_argument(
         "--yes", action="store_true", help="Skip confirmation prompt"
     )
     
@@ -2057,12 +2101,11 @@ Examples:
     
     # Handle qdrant commands
     if args.command == "qdrant":
-        handle_management_command(f"qdrant_{args.qdrant_action}", args)
-        return
-    
-    # Handle erase commands
-    if args.command == "erase":
-        handle_management_command(f"erase_{args.erase_type}", args)
+        if args.qdrant_action == "erase":
+            # Handle nested erase commands
+            handle_management_command(f"qdrant_erase_{args.erase_target}", args)
+        else:
+            handle_management_command(f"qdrant_{args.qdrant_action}", args)
         return
     
     # Handle other management commands
