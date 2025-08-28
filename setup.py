@@ -1,12 +1,7 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
-    name="qdrant_rag",
+    name="qdrant-rag",
     version="1.0.0",
     packages=find_packages(),
-    entry_points={
-        'console_scripts': [
-            'pipeline=qdrant_rag:main_cli',
-        ],
-    },
 )
